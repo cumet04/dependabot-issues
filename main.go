@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -20,7 +21,7 @@ func main() {
 
 	content := ""
 	for _, a := range alerts {
-		if len(a.UpdateError) == 0 {
+		if len(a.UpdateErrorBody) == 0 {
 			continue
 		}
 		s, _ := formatAlert(a)
@@ -33,16 +34,21 @@ func main() {
 }
 
 type Alert struct {
-	CreatedAt    time.Time
-	Number       int
-	UpdateError  string
-	Title        string
-	AdvisoryLink string
-	Description  string
-	Ecosystem    string // NPM, RUBYGEMS, ... refs https://docs.github.com/en/graphql/reference/enums#securityadvisoryecosystem
+	CreatedAt        time.Time
+	Number           int
+	UpdateErrorBody  string
+	UpdateErrorTitle string
+	UpdateErrorType  string
+	Title            string
+	AdvisoryLink     string
+	Description      string
+	Package          string
+	Ecosystem        string // NPM, RUBYGEMS, ... refs https://docs.github.com/en/graphql/reference/enums#securityadvisoryecosystem
+	AffectedVersions string
+	AlertLink        string
 }
 
-func getAlerts(owner string, name string, count int) ([]Alert, error) {
+func getAlerts(owner string, repo string, count int) ([]Alert, error) {
 	src := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: os.Getenv("GITHUB_TOKEN")},
 	)
@@ -58,7 +64,9 @@ func getAlerts(owner string, name string, count int) ([]Alert, error) {
 					Number           int
 					DependabotUpdate struct {
 						Error struct {
-							Body string
+							Body      string
+							ErrorType string
+							Title     string
 						}
 					}
 					SecurityAdvisory struct {
@@ -67,7 +75,9 @@ func getAlerts(owner string, name string, count int) ([]Alert, error) {
 						Description string
 					}
 					SecurityVulnerability struct {
-						Package struct {
+						VulnerableVersionRange string
+						Package                struct {
+							Name      string
 							Ecosystem string
 						}
 					}
@@ -78,7 +88,7 @@ func getAlerts(owner string, name string, count int) ([]Alert, error) {
 
 	err := client.Query(context.Background(), &query, map[string]interface{}{
 		"owner": githubv4.String(owner),
-		"name":  githubv4.String(name),
+		"name":  githubv4.String(repo),
 		"count": githubv4.Int(count),
 	})
 
@@ -89,25 +99,49 @@ func getAlerts(owner string, name string, count int) ([]Alert, error) {
 	var alerts []Alert
 	for _, v := range query.Repository.VulnerabilityAlerts.Nodes {
 		alerts = append(alerts, Alert{
-			CreatedAt:    v.CreatedAt,
-			Number:       v.Number,
-			UpdateError:  v.DependabotUpdate.Error.Body,
-			Title:        v.SecurityAdvisory.Summary,
-			AdvisoryLink: v.SecurityAdvisory.Permalink,
-			Description:  v.SecurityAdvisory.Description,
-			Ecosystem:    v.SecurityVulnerability.Package.Ecosystem,
+			CreatedAt:        v.CreatedAt,
+			Number:           v.Number,
+			UpdateErrorBody:  v.DependabotUpdate.Error.Body,
+			UpdateErrorTitle: v.DependabotUpdate.Error.Title,
+			UpdateErrorType:  v.DependabotUpdate.Error.ErrorType,
+			Title:            v.SecurityAdvisory.Summary,
+			AdvisoryLink:     v.SecurityAdvisory.Permalink,
+			Description:      v.SecurityAdvisory.Description,
+			Package:          v.SecurityVulnerability.Package.Name,
+			Ecosystem:        v.SecurityVulnerability.Package.Ecosystem,
+			AffectedVersions: v.SecurityVulnerability.VulnerableVersionRange,
+			AlertLink:        fmt.Sprintf("https://github.com/%s/%s/security/dependabot/%d", owner, repo, v.Number),
 		})
 	}
 	return alerts, nil
 }
 
-func formatAlert(a Alert) (string, error) {
-	result := fmt.Sprintf("# %d. [%s] %s\n", a.Number, a.Ecosystem, a.Title)
-	result += a.Description + "\n"
-	result += "\n\n---\n\n"
-	result += a.UpdateError
+func formatAlert(alert Alert) (string, error) {
+	tmpl := `
+# [{{.Ecosystem}}] Security Alert: {{.Package}} {{.AffectedVersions}}
 
-	return result, nil
+Original Alert: [#{{.Number}} {{.Title}}]({{.AlertLink}})
+
+## Description
+{{.Description}}
+
+## Dependabot error
+⚠️**{{.UpdateErrorTitle}}**
+
+{{.UpdateErrorBody}}
+	`
+
+	t, err := template.New("preview").Parse(tmpl)
+	if err != nil {
+		return "", nil
+	}
+
+	var b bytes.Buffer
+	if err := t.Execute(&b, alert); err != nil {
+		return "", nil
+	}
+
+	return b.String(), nil
 }
 
 func genPreview(filename string, content string) error {
