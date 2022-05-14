@@ -58,6 +58,7 @@ func getAlerts(owner string, repo string, count int) ([]Alert, error) {
 
 	var query struct {
 		Repository struct {
+			Url                 string
 			VulnerabilityAlerts struct {
 				Nodes []struct {
 					CreatedAt        time.Time
@@ -110,7 +111,7 @@ func getAlerts(owner string, repo string, count int) ([]Alert, error) {
 			Package:          v.SecurityVulnerability.Package.Name,
 			Ecosystem:        v.SecurityVulnerability.Package.Ecosystem,
 			AffectedVersions: v.SecurityVulnerability.VulnerableVersionRange,
-			AlertLink:        fmt.Sprintf("https://github.com/%s/%s/security/dependabot/%d", owner, repo, v.Number),
+			AlertLink:        fmt.Sprintf("%s/security/dependabot/%d", query.Repository.Url, v.Number),
 		})
 	}
 	return alerts, nil
