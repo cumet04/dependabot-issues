@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
+	"text/template"
 	"time"
 
 	"github.com/shurcooL/githubv4"
@@ -16,16 +18,17 @@ func main() {
 		panic(err)
 	}
 
+	content := ""
 	for _, a := range alerts {
 		if len(a.UpdateError) == 0 {
 			continue
 		}
-		fmt.Printf("#%d. [%s] %s\n", a.Number, a.Ecosystem, a.Title)
-		fmt.Println(a.Description)
-		fmt.Println("---")
-		fmt.Print(a.UpdateError)
-		fmt.Println("-----------------------")
-		fmt.Println("")
+		s, _ := formatAlert(a)
+		content += s + "\n"
+	}
+
+	if err := genPreview("preview.html", content); err != nil {
+		panic(err)
 	}
 }
 
@@ -96,4 +99,49 @@ func getAlerts(owner string, name string, count int) ([]Alert, error) {
 		})
 	}
 	return alerts, nil
+}
+
+func formatAlert(a Alert) (string, error) {
+	result := fmt.Sprintf("# %d. [%s] %s\n", a.Number, a.Ecosystem, a.Title)
+	result += a.Description + "\n"
+	result += "\n\n---\n\n"
+	result += a.UpdateError
+
+	return result, nil
+}
+
+func genPreview(filename string, content string) error {
+	// Thanks to https://github.com/markedjs/marked and https://github.com/sindresorhus/github-markdown-css
+	tmpl := `
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+	<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.1.0/github-markdown.min.css">
+</head>
+<body>
+  <div class="markdown-body"></div>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    document.getElementsByClassName("markdown-body")[0].innerHTML = marked.parse(` + "`{{.Content}}`" + `)
+  </script>
+</body>
+</html>
+	`
+	t := template.Must(template.New("preview").Parse(tmpl))
+
+	f, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	err = t.Execute(f, map[string]string{
+		"Content": strings.ReplaceAll(content, "`", "\\`"),
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
