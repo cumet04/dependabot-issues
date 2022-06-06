@@ -24,8 +24,8 @@ func main() {
 		if len(a.UpdateErrorBody) == 0 {
 			continue
 		}
-		s, _ := formatAlert(a)
-		content += s + "\n"
+		d, _ := formatAlert(a)
+		content += d.Body + "\n"
 	}
 
 	if err := genPreview("preview.html", content); err != nil {
@@ -117,10 +117,24 @@ func getAlerts(owner string, repo string, count int) ([]Alert, error) {
 	return alerts, nil
 }
 
-func formatAlert(alert Alert) (string, error) {
-	tmpl := `
-# [{{.Ecosystem}}] Security Alert: {{.Package}} {{.AffectedVersions}}
+func isExistIssue(title string) (bool, error) {
+	return false, nil
+}
 
+type Draft struct {
+	Alert *Alert
+	Title string
+	Body  string
+}
+
+func formatAlert(alert Alert) (*Draft, error) {
+	titleTmpl := "[{{.Ecosystem}}] Security Alert: {{.Package}} {{.AffectedVersions}}"
+	title, err := tmpl(titleTmpl, alert)
+	if err != nil {
+		return nil, err
+	}
+
+	bodyTmpl := `
 Original Alert: [#{{.Number}} {{.Title}}]({{.AlertLink}})
 
 ## Description
@@ -131,15 +145,27 @@ Original Alert: [#{{.Number}} {{.Title}}]({{.AlertLink}})
 
 {{.UpdateErrorBody}}
 	`
-
-	t, err := template.New("preview").Parse(tmpl)
+	body, err := tmpl(bodyTmpl, alert)
 	if err != nil {
-		return "", nil
+		return nil, err
+	}
+
+	return &Draft{
+		Alert: &alert,
+		Title: title,
+		Body:  body,
+	}, nil
+}
+
+func tmpl(tmpl string, alert Alert) (string, error) {
+	t, err := template.New("t").Parse(tmpl)
+	if err != nil {
+		return "", err
 	}
 
 	var b bytes.Buffer
 	if err := t.Execute(&b, alert); err != nil {
-		return "", nil
+		return "", err
 	}
 
 	return b.String(), nil
